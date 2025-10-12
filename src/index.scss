@@ -1,0 +1,23 @@
+
+html, body, #root, .app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: black;
+  padding: 0;
+  margin: 0;
+}
+
+.app {
+ 
+  font-family: monospace;
+
+  button {
+    font-family: monospace;
+  }
+  
+  .hidden {
+    visibility: hidden;
+    opacity: 0;
+  }
+}
