@@ -15,14 +15,11 @@ const OverlayCanvas = ({ tracks }) => {
     ctx.fillStyle = 'rgba(173, 216, 230, 1.0)';
 
     tracks.forEach(track => {
-      const { x, y, width, height, id } = track.bbox;
-
-      // Draw outline box
-      ctx.strokeRect(x, y, width, height);
-
-      // Draw label
-      ctx.fillText(`Person ${id}`, x, y - 8);
+      const { x, y, w, h, id } = track;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillText(id, x, y - 8);
     });
+
   }, [tracks]);
 
   return (

@@ -1,107 +1,177 @@
 import React, { useRef, useEffect, useState } from 'react';
-import * as bodySegmentation from '@tensorflow-models/body-segmentation';
-import '@tensorflow/tfjs-backend-webgl';
-import { matchTracks } from '../../utils'
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import '@tensorflow/tfjs';
+import { Pose } from '@mediapipe/pose';
+import { matchTracks, resetTrackIds } from '../../utils/';
 import OverlayCanvas from '../overlaycanvas';
 import testVid from '../../assets/videos/test1b.mp4';
-import './index.scss'
+import './index.scss';
+
+// Generate a unique but stable color per ID
+const colorForId = (id) => {
+  // Hash the ID into a hue (0–360)
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = id.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 100%, 65%)`;
+};
 
 const WebcamFeed = ({ started, setStarted }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const [segmenter, setSegmenter] = useState(null);
+  const [pose, setPose] = useState(null);
+  const [detector, setDetector] = useState(null);
   const [tracks, setTracks] = useState([]);
 
-  // Load segmentation model once
+  // === Load models ===
   useEffect(() => {
     (async () => {
-      const model = bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation;
-      const config = {
-        runtime: 'mediapipe',
-        solutionPath: `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation`
-      };
-      const loaded = await bodySegmentation.createSegmenter(model, config);
-      setSegmenter(loaded);
+      const det = await cocoSsd.load();
+      setDetector(det);
+
+      const p = new Pose({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+      });
+
+      p.setOptions({
+        modelComplexity: 0,
+        smoothLandmarks: true,
+        enableSegmentation: true,
+        smoothSegmentation: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      // Wrap onResults to promise-style
+      const runPose = (image) =>
+        new Promise((resolve) => {
+          p.onResults((r) => resolve(r));
+          p.send({ image });
+        });
+
+      setPose({ instance: p, runPose });
     })();
+
+    // Reset track counter when component mounts
+    resetTrackIds();
   }, []);
 
-  // Start webcam manually
-  const handleStartCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setStarted(true);
-      }
-    } catch (err) {
-      console.error('Error accessing camera:', err);
-    }
+  // === Camera control ===
+  const startCamera = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    videoRef.current.srcObject = stream;
+    await videoRef.current.play();
+    setStarted(true);
   };
 
-  // Start test video
-  const handleStartVideo = async () => {
-    if (videoRef.current) {
+  const startVideo = async () => {
+    if (videoRef.current.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
       videoRef.current.srcObject = null;
-      videoRef.current.src = testVid;
-      videoRef.current.loop = true;
-      await videoRef.current.play();
-      setStarted(true);
     }
+    videoRef.current.src = testVid;
+    videoRef.current.loop = true;
+    await videoRef.current.play();
+    setStarted(true);
   };
 
-  // Main processing loop
+  // === Main loop (detect + track + pose) ===
   useEffect(() => {
-    if (!segmenter || !started) return;
+    if (!pose || !detector || !started) return;
+
+    const v = videoRef.current;
+    const ctx = canvasRef.current.getContext('2d');
     let running = true;
+    let prevTracks = [];
 
-    const processFrame = async () => {
-      if (!running || !videoRef.current) return;
-      const v = videoRef.current;
-      if (v.videoWidth === 0 || v.videoHeight === 0) {
-        requestAnimationFrame(processFrame);
-        return;
-      }
+    const process = async () => {
+      if (!running || v.videoWidth === 0) return;
 
-      const segmentation = await segmenter.segmentPeople(v);
-      const updatedTracks = matchTracks(segmentation, tracks);
-      setTracks(updatedTracks);
+      const detections = await detector.detect(v);
+      const people = detections
+        .filter((d) => d.class === 'person' && d.score > 0.5)
+        .map((d) => ({
+          x: d.bbox[0],
+          y: d.bbox[1],
+          w: d.bbox[2],
+          h: d.bbox[3],
+        }));
 
-      const ctx = canvasRef.current.getContext('2d');
+      const tracked = matchTracks(people, prevTracks);
+      setTracks(tracked);
+      prevTracks = tracked;
+
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
-      if (segmentation.length > 0) {
-        const mask = await bodySegmentation.toBinaryMask(
-          segmentation,
-          { r: 173, g: 216, b: 230, a: 255 },
-          { r: 0, g: 0, b: 0, a: 0 }
-        );
-        await bodySegmentation.drawMask(
-          canvasRef.current,
-          v,
-          mask,
-          0.5, // opacity
-          0,   // blur
-          false
-        );
+      for (const t of tracked) {
+        const color = colorForId(t.id);
+
+        // === crop and run pose ===
+        const off = document.createElement('canvas');
+        off.width = t.w;
+        off.height = t.h;
+        const octx = off.getContext('2d');
+        octx.drawImage(v, t.x, t.y, t.w, t.h, 0, 0, t.w, t.h);
+
+        const results = await pose.runPose(off);
+
+        // === draw segmentation mask if available ===
+        if (results?.segmentationMask) {
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = t.w;
+          maskCanvas.height = t.h;
+          const mctx = maskCanvas.getContext('2d');
+
+          // draw mask as alpha layer
+          mctx.drawImage(results.segmentationMask, 0, 0, t.w, t.h);
+          const maskData = mctx.getImageData(0, 0, t.w, t.h);
+          const d = maskData.data;
+          const rgb = color.match(/\d+/g).map(Number); // extract r,g,b from hsl/rgb
+
+          for (let i = 0; i < d.length; i += 4) {
+            const alpha = d[i]; // mask intensity (0–255)
+            d[i] = rgb[0];      // R
+            d[i + 1] = rgb[1];  // G
+            d[i + 2] = rgb[2];  // B
+            d[i + 3] = alpha * 0.5; // 50% opacity
+          }
+          mctx.putImageData(maskData, 0, 0);
+
+          // draw the tinted mask back onto main canvas
+          ctx.drawImage(maskCanvas, t.x, t.y, t.w, t.h);
+        }
+
+        // === outline + label ===
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.strokeRect(t.x, t.y, t.w, t.h);
+        ctx.fillStyle = color;
+        ctx.font = '16px sans-serif';
+        ctx.fillText(`ID ${t.id}`, t.x + 5, Math.max(0, t.y - 20));
       }
 
-      requestAnimationFrame(processFrame);
+      requestAnimationFrame(process);
     };
 
-    const onPlay = () => requestAnimationFrame(processFrame);
-    videoRef.current.addEventListener('play', onPlay);
 
+    process();
+    return () => (running = false);
+  }, [pose, detector, started]);
+
+  // === Cleanup ===
+  useEffect(() => {
     return () => {
-      running = false;
-      videoRef.current?.removeEventListener('play', onPlay);
+      if (videoRef.current?.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
+      }
     };
-  }, [segmenter, started]);
+  }, []);
 
   return (
     <div className="webcamfeed">
-
-
       <video
         className="webcamfeed-video"
         ref={videoRef}
@@ -113,13 +183,14 @@ const WebcamFeed = ({ started, setStarted }) => {
       <canvas
         className="webcamfeed-canvas"
         ref={canvasRef}
+        width={640}
+        height={480}
       />
       <OverlayCanvas tracks={tracks} />
 
-      {/* Control Buttons */}
-      <div className='webcamfeed-controls'>
-        <button onClick={handleStartCamera}>Start Camera</button>
-        <button onClick={handleStartVideo}>Start Video</button>
+      <div className="webcamfeed-controls">
+        <button onClick={startCamera}>Start Camera</button>
+        <button onClick={startVideo}>Start Video</button>
       </div>
     </div>
   );
