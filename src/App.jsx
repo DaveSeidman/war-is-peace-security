@@ -13,16 +13,10 @@ const App = () => {
   const poseRef = useRef(null);
   const streamRef = useRef(null);
   const prevTracks = useRef([]);
+  const frameCounter = useRef(0);
+  const lastMasks = useRef({});
 
   const [started, setStarted] = useState(false);
-
-  // === Helper: stable color per ID ===
-  const colorForId = (id) => {
-    let hash = 0;
-    for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
-    const hue = Math.abs(hash) % 360;
-    return `hsl(${hue}, 100%, 65%)`;
-  };
 
   // === Init models ===
   const initModels = useCallback(async () => {
@@ -34,7 +28,7 @@ const App = () => {
     });
 
     poseDetector.setOptions({
-      modelComplexity: 1,
+      modelComplexity: 2,
       smoothLandmarks: true,
       enableSegmentation: true,
       smoothSegmentation: true,
@@ -44,7 +38,7 @@ const App = () => {
 
     const runPose = (image) =>
       new Promise((resolve) => {
-        poseDetector.onResults((r) => resolve(r));
+        poseDetector.onResults(resolve);
         poseDetector.send({ image });
       });
 
@@ -75,9 +69,7 @@ const App = () => {
     }
   }, []);
 
-  const frameCounter = useRef(0);
-  const lastMasks = useRef({});
-
+  // === Main Frame Loop ===
   const processFrame = useCallback(async (now) => {
     const v = videoRef.current;
     const ctx = ctxRef.current;
@@ -86,16 +78,26 @@ const App = () => {
 
     if (!v || !ctx || !detector || !pose) return;
 
-    const detections = await detector.detect(v);
+    // --- Step 1: Downsample frame for SSD ---
+    const DOWNSAMPLED_W = 320;
+    const DOWNSAMPLED_H = 180;
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = DOWNSAMPLED_W;
+    tempCanvas.height = DOWNSAMPLED_H;
+    const tempCtx = tempCanvas.getContext("2d");
+    tempCtx.drawImage(v, 0, 0, DOWNSAMPLED_W, DOWNSAMPLED_H);
+
+    const detections = await detector.detect(tempCanvas);
     const people = detections
       .filter((d) => d.class === "person" && d.score > 0.5)
       .map((d) => ({
-        x: d.bbox[0],
-        y: d.bbox[1],
-        w: d.bbox[2],
-        h: d.bbox[3],
+        // Scale coordinates back to full-res
+        x: (d.bbox[0] / DOWNSAMPLED_W) * v.videoWidth,
+        y: (d.bbox[1] / DOWNSAMPLED_H) * v.videoHeight,
+        w: (d.bbox[2] / DOWNSAMPLED_W) * v.videoWidth,
+        h: (d.bbox[3] / DOWNSAMPLED_H) * v.videoHeight,
       }))
-      .slice(0, 5); // limit to top 5
+      .slice(0, 5); // limit to top 5 people
 
     const tracked = matchTracks(people, prevTracks.current);
     prevTracks.current = tracked;
@@ -106,17 +108,17 @@ const App = () => {
     frameCounter.current++;
 
     for (const t of tracked) {
-      const color = "rgba(0,255,255,0.5)"; // cyan overlay
       const shouldRun = frameCounter.current % 3 === 0;
       let results = lastMasks.current[t.id];
 
-      // expand box before running segmentation
+      // Expand bounding box
       const pad = 50;
       const x = Math.max(0, t.x - pad);
       const y = Math.max(0, t.y - pad);
       const w = Math.min(v.videoWidth - x, t.w + pad * 2);
       const h = Math.min(v.videoHeight - y, t.h + pad * 2);
 
+      // --- Step 2: Full-res pose detection ---
       if (shouldRun) {
         const off = document.createElement("canvas");
         const SEG_W = 256;
@@ -129,43 +131,64 @@ const App = () => {
         lastMasks.current[t.id] = results;
       }
 
-      // Draw segmentation mask if available
+      // === Draw Segmentation Mask ===
       if (results?.segmentationMask) {
-        // Create tinted mask
         const maskCanvas = document.createElement("canvas");
         maskCanvas.width = w;
         maskCanvas.height = h;
         const mctx = maskCanvas.getContext("2d");
-
-        // draw segmentation mask to offscreen canvas
         mctx.drawImage(results.segmentationMask, 0, 0, w, h);
 
-        // apply cyan tint
         const maskData = mctx.getImageData(0, 0, w, h);
         const d = maskData.data;
         for (let i = 0; i < d.length; i += 4) {
-          const alpha = d[i]; // segmentation mask intensity
-          d[i] = 0;           // R
-          d[i + 1] = 255;     // G
-          d[i + 2] = 255;     // B
-          d[i + 3] = alpha * 0.5; // 50% opacity
+          const alpha = d[i];
+          d[i] = 0;
+          d[i + 1] = 255;
+          d[i + 2] = 255;
+          d[i + 3] = alpha * 0.5;
         }
         mctx.putImageData(maskData, 0, 0);
-
-        // draw tinted mask back to main canvas
         ctx.drawImage(maskCanvas, x, y, w, h);
-
-        // draw cyan outline around the mask itself
-        // ctx.save();
-        // ctx.strokeStyle = "cyan";
-        // ctx.lineWidth = 3;
-        // ctx.shadowColor = "rgba(0,255,255,0.6)";
-        // ctx.shadowBlur = 5;
-        // ctx.strokeRect(x, y, w, h);
-        // ctx.restore();
       }
 
-      // optional bounding box (for debugging)
+      // === Draw Pose Landmarks ===
+      // if (results?.poseLandmarks) {
+      //   ctx.save();
+      //   ctx.translate(x, y);
+      //   const scaleX = w;
+      //   const scaleY = h;
+      //   ctx.fillStyle = "rgba(255,255,0,0.9)";
+      //   ctx.strokeStyle = "rgba(255,255,0,0.6)";
+      //   ctx.lineWidth = 2;
+
+      // const drawConnection = (a, b) => {
+      //   const p1 = results.poseLandmarks[a];
+      //   const p2 = results.poseLandmarks[b];
+      //   if (p1 && p2) {
+      //     ctx.beginPath();
+      //     ctx.moveTo(p1.x * scaleX, p1.y * scaleY);
+      //     ctx.lineTo(p2.x * scaleX, p2.y * scaleY);
+      //     ctx.stroke();
+      //   }
+      // };
+
+      // const connections = [
+      //   [11, 13], [13, 15], [12, 14], [14, 16], // arms
+      //   [11, 12], [23, 24], [11, 23], [12, 24], // torso
+      //   [23, 25], [25, 27], [24, 26], [26, 28], // legs
+      // ];
+      // connections.forEach(([a, b]) => drawConnection(a, b));
+
+      // for (const lm of results.poseLandmarks) {
+      //   ctx.beginPath();
+      //   ctx.arc(lm.x * scaleX, lm.y * scaleY, 3, 0, Math.PI * 2);
+      //   ctx.fill();
+      // }
+      //   ctx.restore();
+      // }
+
+      // === Bounding Box (optional/debug) ===
       ctx.strokeStyle = "rgba(0,255,255,0.2)";
       ctx.lineWidth = 1;
       ctx.strokeRect(x, y, w, h);
@@ -173,7 +196,6 @@ const App = () => {
 
     v.requestVideoFrameCallback(processFrame);
   }, []);
-
 
   // === Lifecycle ===
   useEffect(() => {
