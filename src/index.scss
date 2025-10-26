@@ -3,7 +3,7 @@ html, body, #root, .app {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: black;
+  // background: black;
   padding: 0;
   margin: 0;
 }
@@ -19,5 +19,22 @@ html, body, #root, .app {
   .hidden {
     visibility: hidden;
     opacity: 0;
+  }
+
+   position: absolute;
+  inset: 0;
+
+ .video, .canvas {
+    position: absolute;
+  }
+
+  .video {
+    // display: none;
+  }
+
+  .controls {
+    position: absolute;
+    top: 0;
+    right: 0;
   }
 }
