@@ -152,42 +152,6 @@ const App = () => {
         ctx.drawImage(maskCanvas, x, y, w, h);
       }
 
-      // === Draw Pose Landmarks ===
-      // if (results?.poseLandmarks) {
-      //   ctx.save();
-      //   ctx.translate(x, y);
-      //   const scaleX = w;
-      //   const scaleY = h;
-      //   ctx.fillStyle = "rgba(255,255,0,0.9)";
-      //   ctx.strokeStyle = "rgba(255,255,0,0.6)";
-      //   ctx.lineWidth = 2;
-
-      // const drawConnection = (a, b) => {
-      //   const p1 = results.poseLandmarks[a];
-      //   const p2 = results.poseLandmarks[b];
-      //   if (p1 && p2) {
-      //     ctx.beginPath();
-      //     ctx.moveTo(p1.x * scaleX, p1.y * scaleY);
-      //     ctx.lineTo(p2.x * scaleX, p2.y * scaleY);
-      //     ctx.stroke();
-      //   }
-      // };
-
-      // const connections = [
-      //   [11, 13], [13, 15], [12, 14], [14, 16], // arms
-      //   [11, 12], [23, 24], [11, 23], [12, 24], // torso
-      //   [23, 25], [25, 27], [24, 26], [26, 28], // legs
-      // ];
-      // connections.forEach(([a, b]) => drawConnection(a, b));
-
-      // for (const lm of results.poseLandmarks) {
-      //   ctx.beginPath();
-      //   ctx.arc(lm.x * scaleX, lm.y * scaleY, 3, 0, Math.PI * 2);
-      //   ctx.fill();
-      // }
-      //   ctx.restore();
-      // }
-
       // === Bounding Box (optional/debug) ===
       ctx.strokeStyle = "rgba(0,255,255,0.2)";
       ctx.lineWidth = 1;
