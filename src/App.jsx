@@ -12,9 +12,13 @@ const App = () => {
   const detectorRef = useRef(null);
   const poseRef = useRef(null);
   const streamRef = useRef(null);
+
   const prevTracks = useRef([]);
   const frameCounter = useRef(0);
   const lastMasks = useRef({});
+  const targetBoxes = useRef([]);
+  const lastBoxes = useRef([]);
+  const detecting = useRef(false);
 
   const [started, setStarted] = useState(false);
 
@@ -24,7 +28,8 @@ const App = () => {
     detectorRef.current = nextDetector;
 
     const poseDetector = new Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
     });
 
     poseDetector.setOptions({
@@ -43,6 +48,7 @@ const App = () => {
       });
 
     poseRef.current = { instance: poseDetector, runPose };
+    console.log("✅ Models initialized");
   }, []);
 
   // === Start camera ===
@@ -69,16 +75,15 @@ const App = () => {
     }
   }, []);
 
-  // === Main Frame Loop ===
-  const processFrame = useCallback(async (now) => {
+  // === Async Detection Loop ===
+  const detectPeople = useCallback(async () => {
+    if (detecting.current) return;
+    detecting.current = true;
+
     const v = videoRef.current;
-    const ctx = ctxRef.current;
     const detector = detectorRef.current;
-    const pose = poseRef.current;
+    if (!v || !detector) return;
 
-    if (!v || !ctx || !detector || !pose) return;
-
-    // --- Step 1: Downsample frame for SSD ---
     const DOWNSAMPLED_W = 320;
     const DOWNSAMPLED_H = 180;
     const tempCanvas = document.createElement("canvas");
@@ -91,34 +96,72 @@ const App = () => {
     const people = detections
       .filter((d) => d.class === "person" && d.score > 0.5)
       .map((d) => ({
-        // Scale coordinates back to full-res
         x: (d.bbox[0] / DOWNSAMPLED_W) * v.videoWidth,
         y: (d.bbox[1] / DOWNSAMPLED_H) * v.videoHeight,
         w: (d.bbox[2] / DOWNSAMPLED_W) * v.videoWidth,
         h: (d.bbox[3] / DOWNSAMPLED_H) * v.videoHeight,
       }))
-      .slice(0, 5); // limit to top 5 people
+      .slice(0, 5);
 
+    // Track people consistently with matchTracks()
     const tracked = matchTracks(people, prevTracks.current);
     prevTracks.current = tracked;
 
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    targetBoxes.current = tracked;
+    detecting.current = false;
+    lastBoxes.current = tracked.map((t, i) => ({
+      id: `person-${i + 1}`,
+      x: t.x,
+      y: t.y,
+      w: t.w,
+      h: t.h,
+    }));
+
+    setTimeout(detectPeople, 500); // run every 0.5s
+  }, []);
+
+  // === Frame Processing ===
+  const processFrame = useCallback(async () => {
+    const v = videoRef.current;
+    const ctx = ctxRef.current;
+    const pose = poseRef.current;
+
+    if (!v || !ctx || !pose) return;
+
+    // Draw the webcam frame first
+    ctx.globalAlpha = 1;
+    ctx.filter = "none";
     ctx.drawImage(v, 0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    frameCounter.current++;
+    // Smooth interpolation of bounding boxes
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const interpolatedBoxes = lastBoxes.current.map((b, i) => {
+      const t = targetBoxes.current[i];
+      if (!t) return b;
+      return {
+        id: t.id,
+        x: lerp(b.x, t.x, 0.2),
+        y: lerp(b.y, t.y, 0.2),
+        w: lerp(b.w, t.w, 0.2),
+        h: lerp(b.h, t.h, 0.2),
+      };
+    });
+    lastBoxes.current = targetBoxes.current.length
+      ? interpolatedBoxes
+      : lastBoxes.current;
 
-    for (const t of tracked) {
+    // Segmentation every few frames for detected people
+    frameCounter.current++;
+    for (const t of targetBoxes.current) {
       const shouldRun = frameCounter.current % 3 === 0;
       let results = lastMasks.current[t.id];
 
-      // Expand bounding box
       const pad = 50;
       const x = Math.max(0, t.x - pad);
       const y = Math.max(0, t.y - pad);
       const w = Math.min(v.videoWidth - x, t.w + pad * 2);
       const h = Math.min(v.videoHeight - y, t.h + pad * 2);
 
-      // --- Step 2: Full-res pose detection ---
       if (shouldRun) {
         const off = document.createElement("canvas");
         const SEG_W = 256;
@@ -131,7 +174,6 @@ const App = () => {
         lastMasks.current[t.id] = results;
       }
 
-      // === Draw Segmentation Mask ===
       if (results?.segmentationMask) {
         const maskCanvas = document.createElement("canvas");
         maskCanvas.width = w;
@@ -151,12 +193,21 @@ const App = () => {
         mctx.putImageData(maskData, 0, 0);
         ctx.drawImage(maskCanvas, x, y, w, h);
       }
-
-      // === Bounding Box (optional/debug) ===
-      ctx.strokeStyle = "rgba(0,255,255,0.2)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x, y, w, h);
     }
+    // Draw bounding boxes + labels
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#00FFFF"; // solid cyan
+    ctx.fillStyle = "#00FFFF";
+    ctx.font = "20px sans-serif";
+    ctx.textBaseline = "bottom";
+
+    console.log(lastBoxes.current)
+    lastBoxes.current.forEach((b) => {
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.fillText(b.id || "person", b.x + 6, b.y - 6);
+    });
+    ctx.restore();
 
     v.requestVideoFrameCallback(processFrame);
   }, []);
@@ -169,9 +220,9 @@ const App = () => {
     const start = async () => {
       await initModels();
       if (!active) return;
-      console.log("✅ Models initialized");
       await startCamera(() => {
         setStarted(true);
+        detectPeople(); // async detection loop
         videoRef.current.requestVideoFrameCallback(processFrame);
       });
     };
@@ -180,26 +231,20 @@ const App = () => {
 
     return () => {
       active = false;
-
-      if (streamRef.current) {
+      if (streamRef.current)
         streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-
-      const vid = videoRef.current;
-      if (vid) {
-        try {
-          vid.srcObject = null;
-          vid.pause();
-        } catch { }
-      }
     };
-  }, [initModels, startCamera, processFrame]);
+  }, [initModels, startCamera, processFrame, detectPeople]);
 
   return (
     <div className="app">
-      <video className="video" ref={videoRef} playsInline muted />
-      <canvas className="canvas" ref={canvasRef} />
+      <video
+        className="video"
+        ref={videoRef}
+        playsInline
+        muted
+      />
+      <canvas ref={canvasRef} className="canvas" />
       {!started && <div className="loading">Loading models and camera...</div>}
     </div>
   );
