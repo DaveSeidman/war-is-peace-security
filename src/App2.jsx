@@ -27,10 +27,10 @@ const App = () => {
     const human = new Human({
       backend: "webgl",
       async: true,
-      modelBasePath: "/models/",
+      // modelBasePath: "/models/",
       segmentation: {
         enabled: true,
-        modelPath: "models/rvm.json",
+        modelPath: "./models/rvm.json",
         return: "mask",
         smooth: true,
         threshold: 0.01,
