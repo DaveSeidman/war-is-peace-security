@@ -196,13 +196,12 @@ const App = () => {
     }
     // Draw bounding boxes + labels
     ctx.save();
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 6;
     ctx.strokeStyle = "#00FFFF"; // solid cyan
     ctx.fillStyle = "#00FFFF";
     ctx.font = "20px sans-serif";
     ctx.textBaseline = "bottom";
 
-    console.log(lastBoxes.current)
     lastBoxes.current.forEach((b) => {
       ctx.strokeRect(b.x, b.y, b.w, b.h);
       ctx.fillText(b.id || "person", b.x + 6, b.y - 6);
