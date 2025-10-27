@@ -1,51 +1,48 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
-import * as cocoSsd from "@tensorflow-models/coco-ssd";
-import "@tensorflow/tfjs";
-import { Pose } from "@mediapipe/pose";
-import { matchTracks, resetTrackIds } from "./utils";
+import Human from "@vladmandic/human";
 import "./index.scss";
 
 const App = () => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
-  const detectorRef = useRef(null);
-  const poseRef = useRef(null);
   const streamRef = useRef(null);
-  const prevTracks = useRef([]);
-  const frameCounter = useRef(0);
-  const lastMasks = useRef({});
+  const humanRef = useRef(null);
+
+  const offscreenMask = useRef(document.createElement("canvas"));
+  const lastSeg = useRef(null);
 
   const [started, setStarted] = useState(false);
 
-  // === Init models ===
-  const initModels = useCallback(async () => {
-    const nextDetector = await cocoSsd.load();
-    detectorRef.current = nextDetector;
+  // === Init Human ===
+  const initHuman = useCallback(async () => {
+    const config = {
+      backend: "webgl",
+      async: true,
+      warmup: "face",
+      modelBasePath: "https://cdn.jsdelivr.net/npm/@vladmandic/human/models/",
+      body: { enabled: false },
+      face: { enabled: false },
+      hand: { enabled: false },
+      object: { enabled: false },
+      gesture: { enabled: false },
+      segmentation: {
+        enabled: true,
+        modelPath: "selfie.json", // ✅ fastest GPU model
+        return: "mask",
+        smooth: true,
+        threshold: 0.01,
+      },
+      filter: { enabled: false },
+    };
 
-    const poseDetector = new Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-    });
-
-    poseDetector.setOptions({
-      modelComplexity: 2,
-      smoothLandmarks: true,
-      enableSegmentation: true,
-      smoothSegmentation: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
-
-    const runPose = (image) =>
-      new Promise((resolve) => {
-        poseDetector.onResults(resolve);
-        poseDetector.send({ image });
-      });
-
-    poseRef.current = { instance: poseDetector, runPose };
+    const human = new Human(config);
+    await human.load();
+    humanRef.current = human;
+    console.log("✅ Human models loaded");
   }, []);
 
-  // === Start camera ===
+  // === Start Camera ===
   const startCamera = useCallback(async (onReady) => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -60,6 +57,8 @@ const App = () => {
           canvas.width = vid.videoWidth;
           canvas.height = vid.videoHeight;
           ctxRef.current = canvas.getContext("2d");
+          offscreenMask.current.width = vid.videoWidth;
+          offscreenMask.current.height = vid.videoHeight;
         }
         vid.play();
         onReady();
@@ -69,110 +68,93 @@ const App = () => {
     }
   }, []);
 
-  // === Main Frame Loop ===
-  const processFrame = useCallback(async (now) => {
-    const v = videoRef.current;
-    const ctx = ctxRef.current;
-    const detector = detectorRef.current;
-    const pose = poseRef.current;
+  // === Temporal blend helper ===
+  const temporalBlend = (prev, curr) => {
+    if (!prev) return curr;
+    const blended = new Uint8ClampedArray(curr.length);
+    for (let i = 3; i < curr.length; i += 4) {
+      const pa = prev[i];
+      const ca = curr[i];
+      const a = pa * 0.8 + ca * 0.2; // EMA
+      blended[i] = a;
+      blended[i - 3] = 0; // R
+      blended[i - 2] = 200;   // G
+      blended[i - 1] = 200;   // B
+    }
+    return blended;
+  };
 
-    if (!v || !ctx || !detector || !pose) return;
+  // === Segmentation loop ===
+  const segmentLoop = useCallback(async () => {
+    const vid = videoRef.current;
+    const human = humanRef.current;
+    if (!vid || !human) return;
 
-    // --- Step 1: Downsample frame for SSD ---
-    const DOWNSAMPLED_W = 320;
-    const DOWNSAMPLED_H = 180;
-    const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = DOWNSAMPLED_W;
-    tempCanvas.height = DOWNSAMPLED_H;
-    const tempCtx = tempCanvas.getContext("2d");
-    tempCtx.drawImage(v, 0, 0, DOWNSAMPLED_W, DOWNSAMPLED_H);
+    const segTensor = await human.segmentation(vid);
+    if (segTensor) {
+      const [height, width] = segTensor.shape; // height first
+      const rgba = await segTensor.data();
+      const curr = new Uint8ClampedArray(rgba);
 
-    const detections = await detector.detect(tempCanvas);
-    const people = detections
-      .filter((d) => d.class === "person" && d.score > 0.5)
-      .map((d) => ({
-        // Scale coordinates back to full-res
-        x: (d.bbox[0] / DOWNSAMPLED_W) * v.videoWidth,
-        y: (d.bbox[1] / DOWNSAMPLED_H) * v.videoHeight,
-        w: (d.bbox[2] / DOWNSAMPLED_W) * v.videoWidth,
-        h: (d.bbox[3] / DOWNSAMPLED_H) * v.videoHeight,
-      }))
-      .slice(0, 5); // limit to top 5 people
-
-    const tracked = matchTracks(people, prevTracks.current);
-    prevTracks.current = tracked;
-
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.drawImage(v, 0, 0, ctx.canvas.width, ctx.canvas.height);
-
-    frameCounter.current++;
-
-    for (const t of tracked) {
-      const shouldRun = frameCounter.current % 3 === 0;
-      let results = lastMasks.current[t.id];
-
-      // Expand bounding box
-      const pad = 50;
-      const x = Math.max(0, t.x - pad);
-      const y = Math.max(0, t.y - pad);
-      const w = Math.min(v.videoWidth - x, t.w + pad * 2);
-      const h = Math.min(v.videoHeight - y, t.h + pad * 2);
-
-      // --- Step 2: Full-res pose detection ---
-      if (shouldRun) {
-        const off = document.createElement("canvas");
-        const SEG_W = 256;
-        const SEG_H = 256;
-        off.width = SEG_W;
-        off.height = SEG_H;
-        const octx = off.getContext("2d");
-        octx.drawImage(v, x, y, w, h, 0, 0, SEG_W, SEG_H);
-        results = await pose.runPose(off);
-        lastMasks.current[t.id] = results;
+      // Threshold and colorize red
+      for (let i = 0; i < curr.length; i += 4) {
+        const alpha = curr[i + 3];
+        curr[i] = 0;
+        curr[i + 1] = 200;
+        curr[i + 2] = 200;
+        curr[i + 3] = alpha > 100 ? alpha : 0; // hard cutoff
       }
 
-      // === Draw Segmentation Mask ===
-      if (results?.segmentationMask) {
-        const maskCanvas = document.createElement("canvas");
-        maskCanvas.width = w;
-        maskCanvas.height = h;
-        const mctx = maskCanvas.getContext("2d");
-        mctx.drawImage(results.segmentationMask, 0, 0, w, h);
+      // Temporal blend alpha
+      const blended = temporalBlend(lastSeg.current, curr);
+      lastSeg.current = blended;
 
-        const maskData = mctx.getImageData(0, 0, w, h);
-        const d = maskData.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const alpha = d[i];
-          d[i] = 0;
-          d[i + 1] = 255;
-          d[i + 2] = 255;
-          d[i + 3] = alpha * 0.5;
-        }
-        mctx.putImageData(maskData, 0, 0);
-        ctx.drawImage(maskCanvas, x, y, w, h);
-      }
+      // Draw to offscreen canvas
+      const offCtx = offscreenMask.current.getContext("2d");
+      const imageData = new ImageData(blended, width, height);
+      offCtx.putImageData(imageData, 0, 0);
 
-      // === Bounding Box (optional/debug) ===
-      ctx.strokeStyle = "rgba(0,255,255,0.2)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x, y, w, h);
+      segTensor.dispose();
     }
 
-    v.requestVideoFrameCallback(processFrame);
+    setTimeout(segmentLoop, 100); // run ~10FPS
+  }, []);
+
+  // === Draw video + blurred mask overlay ===
+  const drawLoop = useCallback(() => {
+    const vid = videoRef.current;
+    const ctx = ctxRef.current;
+    if (!vid || !ctx) return;
+
+    ctx.drawImage(vid, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // Draw smoothed mask
+    if (offscreenMask.current) {
+      ctx.save();
+      ctx.globalAlpha = 1;
+
+      // GPU-accelerated blur + contrast
+      ctx.filter = "blur(2px) contrast(150%) brightness(120%)";
+      ctx.drawImage(offscreenMask.current, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.filter = "none";
+
+      ctx.restore();
+    }
+
+    vid.requestVideoFrameCallback(drawLoop);
   }, []);
 
   // === Lifecycle ===
   useEffect(() => {
     let active = true;
-    resetTrackIds();
 
     const start = async () => {
-      await initModels();
+      await initHuman();
       if (!active) return;
-      console.log("✅ Models initialized");
       await startCamera(() => {
         setStarted(true);
-        videoRef.current.requestVideoFrameCallback(processFrame);
+        videoRef.current.requestVideoFrameCallback(drawLoop);
+        segmentLoop();
       });
     };
 
@@ -180,12 +162,10 @@ const App = () => {
 
     return () => {
       active = false;
-
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
-
       const vid = videoRef.current;
       if (vid) {
         try {
@@ -194,7 +174,7 @@ const App = () => {
         } catch { }
       }
     };
-  }, [initModels, startCamera, processFrame]);
+  }, [initHuman, startCamera, drawLoop, segmentLoop]);
 
   return (
     <div className="app">
