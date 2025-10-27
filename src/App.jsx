@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from "react";
 import Human from "@vladmandic/human";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import "@tensorflow/tfjs";
+import backgroundVideo from './assets/videos/background.mp4';
 import "./index.scss";
 
 const App = () => {
@@ -230,6 +231,14 @@ const App = () => {
 
   return (
     <div className="app">
+      <video className="background"
+        playsInline
+        muted
+        autoPlay
+        loop
+      ><source src={backgroundVideo} />
+
+      </video>
       <video
         className="video"
         ref={videoRef}
