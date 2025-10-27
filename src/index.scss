@@ -29,7 +29,13 @@ html, body, #root, .app {
   }
 
   .video {
-    // display: none;
+    display: none;
+  }
+
+  .canvas {
+    width: 50%;
+    height: 50%;
+    object-fit: cover;
   }
 
   .controls {
