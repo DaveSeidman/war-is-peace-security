@@ -1,10 +1,10 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
+import * as tf from "@tensorflow/tfjs"; // ✅ Add TensorFlow import first
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import "@tensorflow/tfjs";
 import { Pose } from "@mediapipe/pose";
 import { matchTracks, resetTrackIds } from "./utils";
-import backgroundVideo from './assets/videos/background.mp4';
-
+import backgroundVideo from "./assets/videos/background.mp4";
 import "./index.scss";
 
 const App = () => {
@@ -24,11 +24,19 @@ const App = () => {
 
   const [started, setStarted] = useState(false);
 
-  // === Init models ===
+  // === Init models safely (fix for WebGPU error) ===
   const initModels = useCallback(async () => {
+    console.log("🧠 Initializing TensorFlow backend...");
+    await tf.setBackend("webgl"); // Force a stable backend
+    await tf.ready();
+    console.log("✅ TensorFlow backend ready:", tf.getBackend());
+
+    console.log("📦 Loading coco-ssd...");
     const detector = await cocoSsd.load();
     detectorRef.current = detector;
+    console.log("✅ coco-ssd model loaded");
 
+    console.log("📦 Loading MediaPipe Pose...");
     const poseDetector = new Pose({
       locateFile: (file) =>
         `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
@@ -50,7 +58,7 @@ const App = () => {
       });
 
     poseRef.current = { instance: poseDetector, runPose };
-    console.log("✅ Models initialized");
+    console.log("✅ Pose model initialized");
   }, []);
 
   // === Start camera ===
@@ -77,7 +85,7 @@ const App = () => {
     }
   }, []);
 
-  // === Async Detection Loop (runs ~2FPS) ===
+  // === Async Detection Loop (~2FPS) ===
   const detectPeople = useCallback(async () => {
     if (detecting.current) return;
     detecting.current = true;
@@ -86,7 +94,6 @@ const App = () => {
     const detector = detectorRef.current;
     if (!v || !detector) return;
 
-    // downsample for speed
     const DOWNSAMPLED_W = 320;
     const DOWNSAMPLED_H = 180;
     const tempCanvas = document.createElement("canvas");
@@ -115,7 +122,6 @@ const App = () => {
       ...t,
     }));
 
-    // initialize lastBoxes if empty
     if (lastBoxes.current.length === 0)
       lastBoxes.current = targetBoxes.current.map((b) => ({ ...b }));
 
@@ -130,12 +136,12 @@ const App = () => {
     const pose = poseRef.current;
     if (!v || !ctx || !pose) return;
 
-    // draw webcam
+    // Draw webcam frame
     ctx.globalAlpha = 1;
     ctx.filter = "none";
     ctx.drawImage(v, 0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // animate boxes toward targets
+    // Animate bounding boxes toward targets
     const lerp = (a, b, t) => a + (b - a) * t;
     const newBoxes = lastBoxes.current.map((b, i) => {
       const t = targetBoxes.current[i];
@@ -152,7 +158,7 @@ const App = () => {
       ? newBoxes
       : lastBoxes.current;
 
-    // segmentation every few frames
+    // Segmentation every few frames
     frameCounter.current++;
     for (const t of targetBoxes.current) {
       const shouldRun = frameCounter.current % 3 === 0;
@@ -197,17 +203,17 @@ const App = () => {
       }
     }
 
-    // === Draw boxes and labels on top ===
+    // === Draw boxes + labels ===
     ctx.save();
     ctx.lineWidth = 4;
     ctx.strokeStyle = "rgba(4,236,255,1)";
     ctx.fillStyle = "rgba(4,236,255,0.6)";
-    ctx.font = "32px sans-serif";
+    ctx.font = "28px sans-serif";
     ctx.textBaseline = "bottom";
 
     lastBoxes.current.forEach((b) => {
       ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillText(`human ${b.id}: sheep`, b.x + 6, b.y - 6);
+      ctx.fillText(`${b.id}`, b.x + 6, b.y - 6);
     });
     ctx.restore();
 
@@ -240,14 +246,10 @@ const App = () => {
 
   return (
     <div className="app">
-      <video className="background"
-        playsInline
-        muted
-        autoPlay
-        loop
-      ><source src={backgroundVideo} />
-
+      <video className="background" playsInline muted autoPlay loop>
+        <source src={backgroundVideo} />
       </video>
+
       <video className="video" ref={videoRef} playsInline muted />
       <canvas ref={canvasRef} className="canvas" />
       {!started && <div className="loading">Loading models and camera...</div>}
