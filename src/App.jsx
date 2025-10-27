@@ -200,12 +200,12 @@ const App = () => {
     ctx.lineWidth = 4;
     ctx.strokeStyle = "rgba(4,236,255,1)";
     ctx.fillStyle = "rgba(4,236,255,0.6)";
-    ctx.font = "20px sans-serif";
+    ctx.font = "32px sans-serif";
     ctx.textBaseline = "bottom";
 
     lastBoxes.current.forEach((b) => {
       ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillText(b.id || "person", b.x + 6, b.y - 6);
+      ctx.fillText(`human ${b.id}: sheep`, b.x + 6, b.y - 6);
     });
     ctx.restore();
 
