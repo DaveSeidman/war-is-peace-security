@@ -52,9 +52,7 @@ const App = () => {
   // === Start camera ===
   const startCamera = useCallback(async (onReady) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
       streamRef.current = stream;
       const vid = videoRef.current;
       vid.srcObject = stream;
@@ -93,7 +91,7 @@ const App = () => {
         curr[i] = 0;
         curr[i + 1] = 200;
         curr[i + 2] = 200;
-        curr[i + 3] = alpha > 80 ? alpha : 0;
+        curr[i + 3] = alpha > 50 ? alpha : 0;
       }
 
       const offCtx = offscreenMask.current.getContext("2d");
@@ -176,8 +174,8 @@ const App = () => {
     });
 
     ctx.save();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(255,0,0,0.8)";
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "rgba(4,236,255,1)";
     lastBoxes.current.forEach((b) => {
       ctx.strokeRect(b.x, b.y, b.w, b.h);
     });
