@@ -74,10 +74,12 @@ const App = () => {
   }, []);
 
   // === Segmentation loop ===
+  // === Segmentation loop ===
   const segmentLoop = useCallback(async () => {
     const vid = videoRef.current;
     const human = humanRef.current;
-    if (!vid || !human) return;
+    const offCtx = offscreenMask.current?.getContext("2d");
+    if (!vid || !human || !offCtx) return;
 
     const segTensor = await human.segmentation(vid);
     if (segTensor) {
@@ -91,16 +93,34 @@ const App = () => {
         curr[i] = 0;
         curr[i + 1] = 200;
         curr[i + 2] = 200;
-        curr[i + 3] = alpha > 50 ? alpha : 0;
+        curr[i + 3] = alpha > 50 ? 200 : 0;
       }
 
-      const offCtx = offscreenMask.current.getContext("2d");
+      offCtx.clearRect(0, 0, w, h);
       offCtx.putImageData(new ImageData(curr, w, h), 0, 0);
+
+      // === Draw bounding boxes + labels on top ===
+      offCtx.save();
+      offCtx.lineWidth = 3;
+      offCtx.strokeStyle = "rgba(4,236,255,1)";
+      offCtx.fillStyle = "rgba(4,236,255,1)";
+      offCtx.font = "32px monospaced";
+      offCtx.textBaseline = "bottom";
+
+      if (lastBoxes.current?.length) {
+        lastBoxes.current.forEach((b) => {
+          offCtx.strokeRect(b.x, b.y, b.w, b.h);
+          offCtx.fillText(`person ${b.id}: sheep`, b.x + 6, b.y - 6);
+        });
+      }
+      offCtx.restore();
+
       segTensor.dispose();
     }
 
-    setTimeout(segmentLoop, 100); // 10 fps
+    setTimeout(segmentLoop, 100); // ~10 FPS
   }, []);
+
 
   // === Person detection loop (non-blocking) ===
   const detectLoop = useCallback(async () => {
@@ -174,7 +194,7 @@ const App = () => {
     });
 
     ctx.save();
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 6;
     ctx.strokeStyle = "rgba(4,236,255,1)";
     lastBoxes.current.forEach((b) => {
       ctx.strokeRect(b.x, b.y, b.w, b.h);
