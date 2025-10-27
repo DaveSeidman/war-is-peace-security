@@ -24,8 +24,8 @@ const App = () => {
 
   // === Init models ===
   const initModels = useCallback(async () => {
-    const nextDetector = await cocoSsd.load();
-    detectorRef.current = nextDetector;
+    const detector = await cocoSsd.load();
+    detectorRef.current = detector;
 
     const poseDetector = new Pose({
       locateFile: (file) =>
@@ -33,7 +33,7 @@ const App = () => {
     });
 
     poseDetector.setOptions({
-      modelComplexity: 2,
+      modelComplexity: 1,
       smoothLandmarks: true,
       enableSegmentation: true,
       smoothSegmentation: true,
@@ -75,7 +75,7 @@ const App = () => {
     }
   }, []);
 
-  // === Async Detection Loop ===
+  // === Async Detection Loop (runs ~2FPS) ===
   const detectPeople = useCallback(async () => {
     if (detecting.current) return;
     detecting.current = true;
@@ -84,6 +84,7 @@ const App = () => {
     const detector = detectorRef.current;
     if (!v || !detector) return;
 
+    // downsample for speed
     const DOWNSAMPLED_W = 320;
     const DOWNSAMPLED_H = 180;
     const tempCanvas = document.createElement("canvas");
@@ -103,39 +104,38 @@ const App = () => {
       }))
       .slice(0, 5);
 
-    // Track people consistently with matchTracks()
+    // Track consistent IDs
     const tracked = matchTracks(people, prevTracks.current);
     prevTracks.current = tracked;
 
-    targetBoxes.current = tracked;
-    detecting.current = false;
-    lastBoxes.current = tracked.map((t, i) => ({
+    targetBoxes.current = tracked.map((t, i) => ({
       id: `person-${i + 1}`,
-      x: t.x,
-      y: t.y,
-      w: t.w,
-      h: t.h,
+      ...t,
     }));
 
-    setTimeout(detectPeople, 500); // run every 0.5s
+    // initialize lastBoxes if empty
+    if (lastBoxes.current.length === 0)
+      lastBoxes.current = targetBoxes.current.map((b) => ({ ...b }));
+
+    detecting.current = false;
+    setTimeout(detectPeople, 500); // re-run every half-second
   }, []);
 
-  // === Frame Processing ===
+  // === Frame Processing (runs every frame) ===
   const processFrame = useCallback(async () => {
     const v = videoRef.current;
     const ctx = ctxRef.current;
     const pose = poseRef.current;
-
     if (!v || !ctx || !pose) return;
 
-    // Draw the webcam frame first
+    // draw webcam
     ctx.globalAlpha = 1;
     ctx.filter = "none";
     ctx.drawImage(v, 0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // Smooth interpolation of bounding boxes
+    // animate boxes toward targets
     const lerp = (a, b, t) => a + (b - a) * t;
-    const interpolatedBoxes = lastBoxes.current.map((b, i) => {
+    const newBoxes = lastBoxes.current.map((b, i) => {
       const t = targetBoxes.current[i];
       if (!t) return b;
       return {
@@ -147,10 +147,10 @@ const App = () => {
       };
     });
     lastBoxes.current = targetBoxes.current.length
-      ? interpolatedBoxes
+      ? newBoxes
       : lastBoxes.current;
 
-    // Segmentation every few frames for detected people
+    // segmentation every few frames
     frameCounter.current++;
     for (const t of targetBoxes.current) {
       const shouldRun = frameCounter.current % 3 === 0;
@@ -194,11 +194,12 @@ const App = () => {
         ctx.drawImage(maskCanvas, x, y, w, h);
       }
     }
-    // Draw bounding boxes + labels
+
+    // === Draw boxes and labels on top ===
     ctx.save();
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = "#00FFFF"; // solid cyan
-    ctx.fillStyle = "#00FFFF";
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(4,236,255,1)";
+    ctx.fillStyle = "rgba(4,236,255,0.6)";
     ctx.font = "20px sans-serif";
     ctx.textBaseline = "bottom";
 
@@ -221,7 +222,7 @@ const App = () => {
       if (!active) return;
       await startCamera(() => {
         setStarted(true);
-        detectPeople(); // async detection loop
+        detectPeople();
         videoRef.current.requestVideoFrameCallback(processFrame);
       });
     };
@@ -233,16 +234,11 @@ const App = () => {
       if (streamRef.current)
         streamRef.current.getTracks().forEach((t) => t.stop());
     };
-  }, [initModels, startCamera, processFrame, detectPeople]);
+  }, [initModels, startCamera, detectPeople, processFrame]);
 
   return (
     <div className="app">
-      <video
-        className="video"
-        ref={videoRef}
-        playsInline
-        muted
-      />
+      <video className="video" ref={videoRef} playsInline muted />
       <canvas ref={canvasRef} className="canvas" />
       {!started && <div className="loading">Loading models and camera...</div>}
     </div>
