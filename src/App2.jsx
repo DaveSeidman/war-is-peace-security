@@ -30,7 +30,7 @@ const App = () => {
       modelBasePath: "/models/",
       segmentation: {
         enabled: true,
-        modelPath: "/models/rvm.json",
+        modelPath: "models/rvm.json",
         return: "mask",
         smooth: true,
         threshold: 0.01,
