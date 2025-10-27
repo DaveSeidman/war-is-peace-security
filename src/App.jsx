@@ -3,6 +3,8 @@ import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import "@tensorflow/tfjs";
 import { Pose } from "@mediapipe/pose";
 import { matchTracks, resetTrackIds } from "./utils";
+import backgroundVideo from './assets/videos/background.mp4';
+
 import "./index.scss";
 
 const App = () => {
@@ -238,6 +240,14 @@ const App = () => {
 
   return (
     <div className="app">
+      <video className="background"
+        playsInline
+        muted
+        autoPlay
+        loop
+      ><source src={backgroundVideo} />
+
+      </video>
       <video className="video" ref={videoRef} playsInline muted />
       <canvas ref={canvasRef} className="canvas" />
       {!started && <div className="loading">Loading models and camera...</div>}
