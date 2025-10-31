@@ -26,6 +26,12 @@ const App = () => {
   const nextPersonIndex = useRef(0);
   const nextId = useRef(Math.floor(10000 + Math.random() * 10000));
 
+  const drawMultilineText = (ctx, text, x, y, lineHeight = 18) => {
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      ctx.fillText(line, x, y + i * lineHeight);
+    });
+  };
 
   // === Init Human + Detector ===
   const initModels = useCallback(async () => {
@@ -118,19 +124,19 @@ const App = () => {
         // take the first red person as the zoom target
         const target = redPeople[0];
         const cx = target.x + target.w / 2;
-        const cy = target.y + target.h / 2;
+        const cy = target.y;
         setCanvasStyle({
           transform: "scale(1.5)",
           transformOrigin: `${cx}px ${cy}px`,
         });
       } else {
-        setCanvasStyle({ transform: "scale(1)" });
+        setCanvasStyle({ transform: "scale(1))" });
       }
 
       // === outlines + labels ===
       offCtx.save();
       offCtx.lineWidth = 4;
-      offCtx.font = "16px monospace";
+      offCtx.font = "bold 16px monospace";
       offCtx.textBaseline = "bottom";
 
       lastBoxes.current.forEach((b) => {
@@ -140,19 +146,19 @@ const App = () => {
           offCtx.strokeStyle = "rgb(255,0,0)";
           offCtx.fillStyle = "rgb(255,0,0)";
           offCtx.strokeRect(b.x, b.y, b.w, b.h);
-          offCtx.fillText(
-            `person ${String(b.id).padStart(6, "0")}: ENEMY OF THE STATE!!!`,
+          drawMultilineText(offCtx,
+            `person ${String(b.id).padStart(6, "0")}:\nENEMY OF THE STATE!!!`,
             b.x - 3,
-            b.y - 6
+            b.y - 18
           );
         } else {
           offCtx.strokeStyle = "rgba(4,236,255,1)";
           offCtx.fillStyle = "rgba(4,236,255,1)";
           offCtx.strokeRect(b.x, b.y, b.w, b.h);
-          offCtx.fillText(
-            `person ${String(b.id).padStart(6, "0")}: Threat level: low`,
+          drawMultilineText(offCtx,
+            `person ${String(b.id).padStart(6, "0")}:\nThreat level: low`,
             b.x - 3,
-            b.y - 6
+            b.y - 18
           );
         }
       });
