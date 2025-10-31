@@ -27,7 +27,7 @@ const App = () => {
   const nextId = useRef(Math.floor(10000 + Math.random() * 10000));
 
   const drawMultilineText = (ctx, text, x, y, lineHeight = 18) => {
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     lines.forEach((line, i) => {
       ctx.fillText(line, x, y + i * lineHeight);
     });
@@ -128,9 +128,13 @@ const App = () => {
         setCanvasStyle({
           transform: "scale(1.5)",
           transformOrigin: `${cx}px ${cy}px`,
+          transition: "transform 0.5s ease, transform-origin 0.5s ease",
         });
       } else {
-        setCanvasStyle({ transform: "scale(1))" });
+        setCanvasStyle({
+          transform: "scale(1)",
+          transition: "transform 0.8s ease",
+        });
       }
 
       // === outlines + labels ===
@@ -146,7 +150,8 @@ const App = () => {
           offCtx.strokeStyle = "rgb(255,0,0)";
           offCtx.fillStyle = "rgb(255,0,0)";
           offCtx.strokeRect(b.x, b.y, b.w, b.h);
-          drawMultilineText(offCtx,
+          drawMultilineText(
+            offCtx,
             `person ${String(b.id).padStart(6, "0")}:\nENEMY OF THE STATE!!!`,
             b.x - 3,
             b.y - 18
@@ -155,7 +160,8 @@ const App = () => {
           offCtx.strokeStyle = "rgba(4,236,255,1)";
           offCtx.fillStyle = "rgba(4,236,255,1)";
           offCtx.strokeRect(b.x, b.y, b.w, b.h);
-          drawMultilineText(offCtx,
+          drawMultilineText(
+            offCtx,
             `person ${String(b.id).padStart(6, "0")}:\nThreat level: low`,
             b.x - 3,
             b.y - 18
@@ -228,10 +234,20 @@ const App = () => {
           det.notFoundFrames = 0;
         }
 
+        // === Assign color (more occasional red, only one at a time) ===
         if (!personColors.current.has(det.id)) {
-          nextPersonIndex.current += 1;
-          const isRed = nextPersonIndex.current % 5 === 0;
+          const existingRed = [...personColors.current.values()].includes("red");
+          const isRed = !existingRed && Math.random() < 0.1; // 10% chance if none active
           personColors.current.set(det.id, isRed ? "red" : "cyan");
+
+          if (isRed) {
+            // revert to cyan after 4–8 seconds
+            setTimeout(() => {
+              if (personColors.current.get(det.id) === "red") {
+                personColors.current.set(det.id, "cyan");
+              }
+            }, 4000 + Math.random() * 4000);
+          }
         }
 
         newBoxes.push(det);

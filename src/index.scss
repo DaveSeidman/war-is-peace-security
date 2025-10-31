@@ -38,8 +38,8 @@ html, body, #root, .app {
   }
 
   .camera { 
-    width: 100%;
-    height: 100%;
+    width: 50%;
+    height: 50%;
     overflow: hidden;
 
     &-canvas {
@@ -49,7 +49,8 @@ html, body, #root, .app {
       object-fit: cover;
       transition:
         transform 1s cubic-bezier(0.19, 1, 0.22, 1),
-        transform-origin 2s cubic-bezier(0.19, 1, 0.22, 1);    }
+        transform-origin 2s cubic-bezier(0.19, 1, 0.22, 1);   
+    }
   }
 
   .controls {
