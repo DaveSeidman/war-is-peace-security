@@ -15,15 +15,17 @@ const App = () => {
   const offscreenMask = useRef(document.createElement("canvas"));
 
   const [started, setStarted] = useState(false);
+  const [canvasStyle, setCanvasStyle] = useState({});
 
   const lastBoxes = useRef([]);
   const targetBoxes = useRef([]);
   const lastUpdateTime = useRef(0);
-  const rawDetections = useRef([]); // coco detections
+  const rawDetections = useRef([]);
 
   const personColors = useRef(new Map());
   const nextPersonIndex = useRef(0);
-  const nextId = useRef(1);
+  const nextId = useRef(Math.floor(10000 + Math.random() * 10000));
+
 
   // === Init Human + Detector ===
   const initModels = useCallback(async () => {
@@ -109,32 +111,50 @@ const App = () => {
         const now = performance.now() / 1000;
         const flashPhase = (Math.sin(now * Math.PI * 2) + 1) / 2;
         const intensity = 100 + Math.floor(flashPhase * 155);
-        offCtx.fillStyle = `rgba(${intensity},0,0,0.35)`;
+        offCtx.fillStyle = `rgba(${intensity},0,0,1)`;
         redPeople.forEach((b) => offCtx.fillRect(b.x, b.y, b.w, b.h));
         offCtx.restore();
+
+        // take the first red person as the zoom target
+        const target = redPeople[0];
+        const cx = target.x + target.w / 2;
+        const cy = target.y + target.h / 2;
+        setCanvasStyle({
+          transform: "scale(1.5)",
+          transformOrigin: `${cx}px ${cy}px`,
+        });
+      } else {
+        setCanvasStyle({ transform: "scale(1)" });
       }
 
-      // outlines + labels
+      // === outlines + labels ===
       offCtx.save();
-      offCtx.lineWidth = 3;
-      offCtx.font = "32px monospaced";
+      offCtx.lineWidth = 4;
+      offCtx.font = "16px monospace";
       offCtx.textBaseline = "bottom";
-      const now = performance.now() / 1000;
-      const flashPhase = (Math.sin(now * Math.PI * 2) + 1) / 2;
 
       lastBoxes.current.forEach((b) => {
         const color = personColors.current.get(b.id) || "cyan";
-        let strokeColor;
+
         if (color === "red") {
-          const intensity = 100 + Math.floor(flashPhase * 155);
-          strokeColor = `rgb(${intensity},0,0)`;
+          offCtx.strokeStyle = "rgb(255,0,0)";
+          offCtx.fillStyle = "rgb(255,0,0)";
+          offCtx.strokeRect(b.x, b.y, b.w, b.h);
+          offCtx.fillText(
+            `person ${String(b.id).padStart(6, "0")}: ENEMY OF THE STATE!!!`,
+            b.x - 3,
+            b.y - 6
+          );
         } else {
-          strokeColor = "rgba(4,236,255,1)";
+          offCtx.strokeStyle = "rgba(4,236,255,1)";
+          offCtx.fillStyle = "rgba(4,236,255,1)";
+          offCtx.strokeRect(b.x, b.y, b.w, b.h);
+          offCtx.fillText(
+            `person ${String(b.id).padStart(6, "0")}: Threat level: low`,
+            b.x - 3,
+            b.y - 6
+          );
         }
-        offCtx.strokeStyle = strokeColor;
-        offCtx.fillStyle = strokeColor;
-        offCtx.strokeRect(b.x, b.y, b.w, b.h);
-        offCtx.fillText(`person ${b.notFoundFrames ?? 0}`, b.x + 6, b.y - 6);
       });
 
       offCtx.restore();
@@ -152,7 +172,7 @@ const App = () => {
 
     try {
       const results = await detector.detect(vid);
-      rawDetections.current = results; // store everything (people + non-people)
+      rawDetections.current = results;
 
       const detections = results
         .filter((r) => r.class === "person" && r.score > 0.5)
@@ -217,11 +237,8 @@ const App = () => {
         const match = newBoxes.find((b) => b.id === p.id);
         if (!match) {
           const missed = { ...p, notFoundFrames: (p.notFoundFrames ?? 0) + 1 };
-          if (missed.notFoundFrames <= 5) {
-            survivors.push(missed);
-          } else {
-            personColors.current.delete(p.id);
-          }
+          if (missed.notFoundFrames <= 5) survivors.push(missed);
+          else personColors.current.delete(p.id);
         }
       });
 
@@ -234,12 +251,6 @@ const App = () => {
       if (lastBoxes.current.length === 0) {
         lastBoxes.current = targetBoxes.current.map((b) => ({ ...b }));
       }
-
-      // Log untracked persons for debugging
-      const trackedIDs = new Set(targetBoxes.current.map((b) => b.id));
-      detections.forEach((d) => {
-        if (!trackedIDs.has(d.id)) console.log("🟡 Untracked person", d);
-      });
 
       lastUpdateTime.current = performance.now();
     } catch (err) {
@@ -267,6 +278,8 @@ const App = () => {
     }
 
     const lerpFactor = 0.1;
+
+    // 1) lerp existing ones
     lastBoxes.current = lastBoxes.current.map((b) => {
       const t = targetBoxes.current.find((x) => x.id === b.id);
       if (!t) return b;
@@ -280,39 +293,12 @@ const App = () => {
       };
     });
 
-    const now = performance.now() / 1000;
-    const flashPhase = (Math.sin(now * Math.PI * 2) + 1) / 2;
-
-    ctx.save();
-
-    // draw raw detections: yellow for person, white for others
-    ctx.lineWidth = 2;
-    rawDetections.current.forEach((r) => {
-      const [x, y, w, h] = r.bbox;
-      if (r.class === "person") ctx.strokeStyle = "yellow";
-      else ctx.strokeStyle = "white";
-      ctx.strokeRect(x, y, w, h);
+    // 2) add new tracked boxes if missing
+    targetBoxes.current.forEach((t) => {
+      const exists = lastBoxes.current.find((b) => b.id === t.id);
+      if (!exists) lastBoxes.current.push({ ...t });
     });
 
-    // draw tracked boxes
-    ctx.lineWidth = 6;
-    lastBoxes.current.forEach((b) => {
-      const color = personColors.current.get(b.id) || "cyan";
-      let strokeColor;
-      if (color === "red") {
-        const intensity = 100 + Math.floor(flashPhase * 155);
-        strokeColor = `rgb(${intensity},0,0)`;
-      } else {
-        strokeColor = "rgba(4,236,255,1)";
-      }
-      ctx.strokeStyle = strokeColor;
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillStyle = strokeColor;
-      ctx.font = "20px monospace";
-      ctx.fillText(`missed:${b.notFoundFrames ?? 0}`, b.x + 6, b.y - 6);
-    });
-
-    ctx.restore();
     vid.requestVideoFrameCallback(drawLoop);
   }, []);
 
@@ -343,7 +329,9 @@ const App = () => {
         <source src={backgroundVideo} />
       </video>
       <video className="video" ref={videoRef} playsInline muted />
-      <canvas ref={canvasRef} className="canvas" />
+      <div className="camera">
+        <canvas ref={canvasRef} className="camera-canvas" style={canvasStyle} />
+      </div>
       {!started && <div className="loading">Loading models and camera...</div>}
     </div>
   );

@@ -36,10 +36,15 @@ html, body, #root, .app {
    height: 100%;
    object-fit: cover; 
   }
-  .canvas {
+
+  .camera { 
     width: 50%;
     height: 50%;
-    object-fit: cover;
+    overflow: hidden;
+    &-canvas {
+      object-fit: cover;
+      transition: transform 1s cubic-bezier(0.19, 1, 0.22, 1);
+    }
   }
 
   .controls {
